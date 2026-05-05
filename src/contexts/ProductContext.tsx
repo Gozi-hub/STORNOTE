@@ -97,39 +97,53 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
         .on('postgres_changes', { 
           event: '*', 
           schema: 'public', 
-          table: 'products',
-          filter: `user_id=eq.${user.id}`
+          table: 'products'
         }, (payload) => {
-          console.log('[Realtime] Product change received:', payload.eventType, payload.new?.id || payload.old?.id);
+          console.log('[Realtime] Product event received:', payload.eventType, payload.new?.id || payload.old?.id);
           
-          if (payload.eventType === 'INSERT') {
-            const newProduct = payload.new as Product;
-            const blacklist = getPersistentBlacklist();
-            if (blacklist.has(newProduct.id) || deletedIdsRef.current.has(newProduct.id)) return;
-
-            setProducts(prev => {
-              if (prev.some(p => p.id === newProduct.id)) return prev;
-              return [...prev, newProduct].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-            });
-          } else if (payload.eventType === 'UPDATE') {
-            const updatedProduct = payload.new as Product;
-            const blacklist = getPersistentBlacklist();
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const data = payload.new as Product;
             
-            if (updatedProduct.status === '已彻底删除' || blacklist.has(updatedProduct.id) || deletedIdsRef.current.has(updatedProduct.id)) {
-              setProducts(prev => prev.filter(p => p.id !== updatedProduct.id));
+            // Safety check: ensure user_id matches
+            if (data.user_id && data.user_id !== user.id) {
+              console.log('[Realtime] Ignoring event for different user:', data.user_id);
               return;
             }
 
-            setProducts(prev => {
-              if (!prev.some(p => p.id === updatedProduct.id)) {
-                // If it wasn't in list but now updated to something visible, add it
-                return [...prev, updatedProduct].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            if (payload.eventType === 'INSERT') {
+              const blacklist = getPersistentBlacklist();
+              if (blacklist.has(data.id) || deletedIdsRef.current.has(data.id)) {
+                console.log('[Realtime] Ignoring INSERT for locally deleted item');
+                return;
               }
-              return prev.map(p => p.id === updatedProduct.id ? { ...p, ...updatedProduct } : p);
-            });
+              
+              setProducts(prev => {
+                if (prev.some(p => p.id === data.id)) return prev;
+                console.log('[Realtime] Adding new product via sync:', data.id);
+                return [...prev, data].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+              });
+            } else if (payload.eventType === 'UPDATE') {
+              const blacklist = getPersistentBlacklist();
+              if (data.status === '已彻底删除' || blacklist.has(data.id) || deletedIdsRef.current.has(data.id)) {
+                console.log('[Realtime] Removing updated product (soft-deleted):', data.id);
+                setProducts(prev => prev.filter(p => p.id !== data.id));
+                return;
+              }
+
+              setProducts(prev => {
+                const exists = prev.some(p => p.id === data.id);
+                if (!exists) {
+                   console.log('[Realtime] Product appeared via UPDATE sync:', data.id);
+                   return [...prev, data].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                }
+                console.log('[Realtime] Updating product via sync:', data.id);
+                return prev.map(p => p.id === data.id ? { ...p, ...data } : p);
+              });
+            }
           } else if (payload.eventType === 'DELETE') {
             const deletedId = payload.old.id;
             if (deletedId) {
+              console.log('[Realtime] Syncing product deletion:', deletedId);
               setProducts(prev => prev.filter(p => p.id !== deletedId));
             }
           }

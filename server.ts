@@ -25,6 +25,7 @@ async function startServer() {
   // Flexible detection: Check for both VITE_ prefixed and unprefixed versions
   const SUPABASE_URL_RAW = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "").trim();
   const SUPABASE_ANON_KEY = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "").trim();
+  const SUPABASE_MGMT_URL = "https://api.supabase.com";
 
   // Protocol validation and URL cleaning
   let SUPABASE_URL = SUPABASE_URL_RAW;
@@ -41,7 +42,7 @@ async function startServer() {
 
   // 0. Vital Credential Guard - Return JSON if config is missing
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    app.all(['/supabase-proxy*', '/auth/v1*', '/rest/v1*', '/storage/v1*'], (req, res) => {
+    app.all(['/supabase-proxy*', '/auth/v1*', '/rest/v1*', '/storage/v1*', '/supabase-mgmt-proxy*'], (req, res) => {
       res.status(503).json({ 
         error: 'Supabase Configuration Missing', 
         message: '服务器未配置 Supabase 环境变量 (SUPABASE_URL 或 SUPABASE_ANON_KEY)',
@@ -50,11 +51,13 @@ async function startServer() {
     });
   }
 
+  let supabaseProxy: any = null;
+
   // 1. Supabase API Proxy - MUST BE MOUNTED BEFORE ANY BODY-PARSING MIDDLEWARE
   if (SUPABASE_URL && SUPABASE_ANON_KEY) {
     const targetBase = new URL(SUPABASE_URL);
     
-    const supabaseProxy = createProxyMiddleware({
+    supabaseProxy = createProxyMiddleware({
       target: SUPABASE_URL,
       changeOrigin: true,
       secure: false,
@@ -122,6 +125,23 @@ async function startServer() {
         req.url = p.replace('/supabase-proxy', '');
         if (req.url === '') req.url = '/';
         return supabaseProxy(req, res, next);
+      }
+      
+      // If it's a management proxy request
+      if (p.startsWith('/supabase-mgmt-proxy')) {
+        req.url = p.replace('/supabase-mgmt-proxy', '');
+        if (req.url === '') req.url = '/';
+        return createProxyMiddleware({
+          target: SUPABASE_MGMT_URL,
+          changeOrigin: true,
+          secure: false,
+          on: {
+            proxyReq: (proxyReq) => {
+              proxyReq.setHeader('host', 'api.supabase.com');
+              proxyReq.setHeader('Origin', 'https://api.supabase.com');
+            }
+          }
+        })(req, res, next);
       }
       
       // If it's a direct Supabase path, pass it through AS IS
@@ -291,9 +311,28 @@ async function startServer() {
     app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+
+  // CRITICAL: Handle WebSocket upgrades for the proxy
+  if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+     server.on('upgrade', (req, socket, head) => {
+       const p = req.url || '';
+       if (p.includes('realtime') || p.includes('supabase-proxy')) {
+         console.log(`[Proxy] Upgrading WebSocket for: ${p}`);
+         
+         // Fix req.url before passing to proxy
+         if (p.startsWith('/supabase-proxy')) {
+           req.url = p.replace('/supabase-proxy', '');
+         }
+         
+         if (supabaseProxy) {
+           supabaseProxy.upgrade(req, socket, head);
+         }
+       }
+     });
+  }
 }
 
 startServer();

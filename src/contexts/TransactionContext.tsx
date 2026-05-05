@@ -109,25 +109,35 @@ export function TransactionProvider({ children }: { children: React.ReactNode })
         .on('postgres_changes', { 
           event: '*', 
           schema: 'public', 
-          table: 'transactions',
-          filter: `user_id=eq.${user.id}`
+          table: 'transactions'
         }, (payload) => {
-          console.log('[Realtime] Transaction change received:', payload.eventType);
+          console.log('[Realtime] Transaction event received:', payload.eventType, payload.new?.id || payload.old?.id);
           
-          if (payload.eventType === 'INSERT') {
-            const newTr = payload.new as Transaction;
-            setTransactions(prev => {
-              if (prev.some(t => t.id === newTr.id)) return prev;
-              return [newTr, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            });
-          } else if (payload.eventType === 'UPDATE') {
-            const updatedTr = payload.new as Transaction;
-            setTransactions(prev => prev.map(t => t.id === updatedTr.id ? updatedTr : t)
-              .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-            );
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const data = payload.new as Transaction;
+            
+            // Safety check
+            if (data.user_id && data.user_id !== user.id) {
+              console.log('[Realtime] Ignoring transaction event for different user');
+              return;
+            }
+
+            if (payload.eventType === 'INSERT') {
+              setTransactions(prev => {
+                if (prev.some(t => t.id === data.id)) return prev;
+                console.log('[Realtime] Adding new transaction via sync:', data.id);
+                return [data, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+              });
+            } else if (payload.eventType === 'UPDATE') {
+              console.log('[Realtime] Updating transaction via sync:', data.id);
+              setTransactions(prev => prev.map(t => t.id === data.id ? data : t)
+                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+              );
+            }
           } else if (payload.eventType === 'DELETE') {
             const deletedId = payload.old.id;
             if (deletedId) {
+              console.log('[Realtime] Syncing transaction deletion:', deletedId);
               setTransactions(prev => prev.filter(t => t.id !== deletedId));
             }
           }

@@ -44,6 +44,13 @@ try {
                  newUrl = `${window.location.origin}/supabase-proxy${parts[1]}`;
                }
             } 
+            // 1.1 Support for api.supabase.com calls
+            else if (url.includes('api.supabase.com')) {
+               const parts = url.split('api.supabase.com');
+               if (parts.length > 1) {
+                 newUrl = `${window.location.origin}/supabase-mgmt-proxy${parts[1]}`;
+               }
+            }
             // 2. Fix relative paths that might be absolute-relative (starting with slash)
             else if (url.startsWith('/auth/v1') || url.startsWith('/rest/v1') || url.startsWith('/storage/v1')) {
                newUrl = `${window.location.origin}/supabase-proxy${url}`;
