@@ -86,12 +86,13 @@ export default function Login() {
       if (profileError || !profile) {
         const msg = '账户信息不存在，请联系管理员';
         setError(msg);
-        toast.error(msg);
+        toast.error(msg, { id: 'login-loading' });
         await supabase.auth.signOut();
         return;
       }
       
       if (profile.role === 'admin') {
+        toast.dismiss('login-loading');
         navigate('/admin/approval');
         return;
       }
@@ -99,7 +100,7 @@ export default function Login() {
       if (profile.status === 'pending') {
         const msg = '您的账户申请正在审核中，请耐心等待邮件通知';
         setError(msg);
-        toast.error(msg);
+        toast.error(msg, { id: 'login-loading' });
         await supabase.auth.signOut();
         return;
       }
@@ -107,19 +108,22 @@ export default function Login() {
       if (profile.status === 'rejected') {
         const msg = `您的申请已被拒绝。原因：${profile.rejection_reason || '未说明'}`;
         setError(msg);
-        toast.error(msg);
+        toast.error(msg, { id: 'login-loading' });
         await supabase.auth.signOut();
         return;
       }
 
       // Approved user
+      toast.dismiss('login-loading');
       navigate('/dashboard');
     } catch (err: any) {
       console.error('Login error details:', err);
       let errorMessage = '登录失败，请检查您的网络连接或稍后重试';
       
       try {
-        // 1. Get a string message from the error object
+        // ... (error parsing logic)
+        // ...
+        // (existing error parsing logic)
         let msg = '';
         if (typeof err.message === 'string') {
           msg = err.message;
@@ -129,18 +133,14 @@ export default function Login() {
           msg = typeof err === 'string' ? err : JSON.stringify(err);
         }
 
-        // 2. If it's a JSON string (possibly from proxy), parse it to get the real message
         const finalMsg = msg || '';
         if (finalMsg.trim().startsWith('{')) {
           try {
             const parsed = JSON.parse(finalMsg);
             msg = parsed.message || parsed.error || finalMsg;
-          } catch (e) {
-            // Keep original msg if parse fails
-          }
+          } catch (e) {}
         }
 
-        // 3. Map common errors to user-friendly Chinese messages
         if (msg.includes('Invalid login credentials')) {
           errorMessage = '邮箱或密码错误，请重新输入';
         } else if (msg.includes('Email not confirmed')) {
@@ -157,7 +157,7 @@ export default function Login() {
       }
       
       setError(errorMessage);
-      toast.error(errorMessage);
+      toast.error(errorMessage, { id: 'login-loading' });
     } finally {
       setLoading(false);
     }
