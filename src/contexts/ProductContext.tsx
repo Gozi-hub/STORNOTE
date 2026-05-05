@@ -109,71 +109,59 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
       const channel = supabase
         .channel(`public:products:user:${user.id}`)
         .on('postgres_changes', { 
-          event: 'INSERT', 
+          event: '*', 
           schema: 'public', 
-          table: 'products'
+          table: 'products',
+          filter: `user_id=eq.${user.id}`
         }, (payload) => {
-          const newProduct = payload.new as Product;
-          if (newProduct.user_id !== user.id) return;
-          const blacklist = getPersistentBlacklist();
-          if (blacklist.has(newProduct.id) || deletedIdsRef.current.has(newProduct.id)) {
-            console.log('[Realtime] Ignoring INSERT for already deleted product:', newProduct.id);
-            return;
-          }
-          console.log('[Realtime] INSERT received:', newProduct.id);
-          setProducts(prev => {
-            // Priority 1: Prevent duplicate adding
-            if (prev.some(p => p.id === newProduct.id)) return prev;
-            
-            // Priority 2: Try to enrich if we can find metadata even for newly synced items
-            const savedMeta = localStorage.getItem(`stornote_meta_${newProduct.id}`);
-            let enriched = newProduct;
-            if (savedMeta) {
-              try {
-                const meta = JSON.parse(savedMeta);
-                enriched = {
-                  ...newProduct,
-                  cost_price: meta.costPrice,
-                  base_inventory: meta.baseInventory,
-                  inventory_threshold: meta.inventoryThreshold
-                };
-              } catch (e) {}
-            }
-            return [...prev, enriched].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-          });
-        })
-        .on('postgres_changes', { 
-          event: 'UPDATE', 
-          schema: 'public', 
-          table: 'products'
-        }, (payload) => {
-          const updatedProduct = payload.new as Product;
-          if (updatedProduct.user_id !== user.id) return;
+          console.log('[Realtime] Product change received:', payload.eventType, payload.new?.id || payload.old?.id);
           
-          const blacklist = getPersistentBlacklist();
-          // If status becomes "已彻底删除", or in blacklist, treat as a delete event
-          if (updatedProduct.status === '已彻底删除' || blacklist.has(updatedProduct.id) || deletedIdsRef.current.has(updatedProduct.id)) {
-            console.log('[Realtime] Product hidden or deleted:', updatedProduct.id);
-            setProducts(prev => prev.filter(p => p.id !== updatedProduct.id));
-            return;
-          }
+          if (payload.eventType === 'INSERT') {
+            const newProduct = payload.new as Product;
+            const blacklist = getPersistentBlacklist();
+            if (blacklist.has(newProduct.id) || deletedIdsRef.current.has(newProduct.id)) return;
 
-          console.log('[Realtime] UPDATE received:', updatedProduct.id);
-          setProducts(prev => {
-            // Only update if it exists
-            if (!prev.some(p => p.id === updatedProduct.id)) return prev;
-            return prev.map(p => p.id === updatedProduct.id ? updatedProduct : p);
-          });
-        })
-        .on('postgres_changes', { 
-          event: 'DELETE', 
-          schema: 'public', 
-          table: 'products'
-        }, (payload) => {
-          const deletedId = payload.old.id;
-          if (!deletedId) return;
-          console.log('[Realtime] DELETE received:', deletedId);
-          setProducts(prev => prev.filter(p => p.id !== deletedId));
+            setProducts(prev => {
+              if (prev.some(p => p.id === newProduct.id)) return prev;
+              
+              // We'll still check localStorage for missing meta during migration period
+              const savedMeta = localStorage.getItem(`stornote_meta_${newProduct.id}`);
+              let enriched = newProduct;
+              if (savedMeta) {
+                try {
+                  const meta = JSON.parse(savedMeta);
+                  enriched = {
+                    ...newProduct,
+                    cost_price: meta.costPrice,
+                    base_inventory: meta.baseInventory,
+                    inventory_threshold: meta.inventoryThreshold
+                  };
+                } catch (e) {}
+              }
+              return [...prev, enriched].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedProduct = payload.new as Product;
+            const blacklist = getPersistentBlacklist();
+            
+            if (updatedProduct.status === '已彻底删除' || blacklist.has(updatedProduct.id) || deletedIdsRef.current.has(updatedProduct.id)) {
+              setProducts(prev => prev.filter(p => p.id !== updatedProduct.id));
+              return;
+            }
+
+            setProducts(prev => {
+              if (!prev.some(p => p.id === updatedProduct.id)) {
+                // If it wasn't in list but now updated to something visible, add it
+                return [...prev, updatedProduct].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+              }
+              return prev.map(p => p.id === updatedProduct.id ? { ...p, ...updatedProduct } : p);
+            });
+          } else if (payload.eventType === 'DELETE') {
+            const deletedId = payload.old.id;
+            if (deletedId) {
+              setProducts(prev => prev.filter(p => p.id !== deletedId));
+            }
+          }
         })
         .subscribe((status) => {
           if (status === 'SUBSCRIBED') {
@@ -182,7 +170,6 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
         });
 
       return () => {
-        console.log('[ProductContext] Cleaning up real-time channel');
         supabase.removeChannel(channel);
       };
     } else {

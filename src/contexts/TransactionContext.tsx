@@ -105,14 +105,32 @@ export function TransactionProvider({ children }: { children: React.ReactNode })
       
       // Real-time subscription
       const channel = supabase
-        .channel('transactions_changes')
+        .channel(`public:transactions:user:${user.id}`)
         .on('postgres_changes', { 
           event: '*', 
           schema: 'public', 
           table: 'transactions',
           filter: `user_id=eq.${user.id}`
-        }, () => {
-          fetchTransactions();
+        }, (payload) => {
+          console.log('[Realtime] Transaction change received:', payload.eventType);
+          
+          if (payload.eventType === 'INSERT') {
+            const newTr = payload.new as Transaction;
+            setTransactions(prev => {
+              if (prev.some(t => t.id === newTr.id)) return prev;
+              return [newTr, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedTr = payload.new as Transaction;
+            setTransactions(prev => prev.map(t => t.id === updatedTr.id ? updatedTr : t)
+              .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+            );
+          } else if (payload.eventType === 'DELETE') {
+            const deletedId = payload.old.id;
+            if (deletedId) {
+              setTransactions(prev => prev.filter(t => t.id !== deletedId));
+            }
+          }
         })
         .subscribe();
 
