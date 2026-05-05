@@ -75,23 +75,9 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
       if (error) throw error;
       
       const blacklist = getPersistentBlacklist();
-      const enrichedData = (data || []).map(p => {
-        const savedMeta = localStorage.getItem(`stornote_meta_${p.id}`);
-        if (savedMeta) {
-          try {
-            const meta = JSON.parse(savedMeta);
-            return {
-              ...p,
-              cost_price: meta.costPrice,
-              base_inventory: meta.baseInventory,
-              inventory_threshold: meta.inventoryThreshold
-            };
-          } catch (e) {}
-        }
-        return p;
-      }).filter(p => !blacklist.has(p.id) && !deletedIdsRef.current.has(p.id));
+      const enrichedData = (data || []).filter(p => !blacklist.has(p.id) && !deletedIdsRef.current.has(p.id));
       
-      console.log(`[ProductContext] Fetched ${enrichedData.length} enriched products`);
+      console.log(`[ProductContext] Fetched ${enrichedData.length} products`);
       setProducts(enrichedData);
     } catch (error) {
       console.error('[ProductContext] Error fetching products:', error);
@@ -123,22 +109,7 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
 
             setProducts(prev => {
               if (prev.some(p => p.id === newProduct.id)) return prev;
-              
-              // We'll still check localStorage for missing meta during migration period
-              const savedMeta = localStorage.getItem(`stornote_meta_${newProduct.id}`);
-              let enriched = newProduct;
-              if (savedMeta) {
-                try {
-                  const meta = JSON.parse(savedMeta);
-                  enriched = {
-                    ...newProduct,
-                    cost_price: meta.costPrice,
-                    base_inventory: meta.baseInventory,
-                    inventory_threshold: meta.inventoryThreshold
-                  };
-                } catch (e) {}
-              }
-              return [...prev, enriched].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+              return [...prev, newProduct].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
             });
           } else if (payload.eventType === 'UPDATE') {
             const updatedProduct = payload.new as Product;
@@ -182,13 +153,16 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
     if (!user) return;
     try {
       console.log('[ProductContext] Adding product:', p.name);
-      const { name, sku, price_value, status, status_color, is_out_of_stock } = p;
+      const { name, sku, price_value, cost_price, base_inventory, inventory_threshold, status, status_color, is_out_of_stock } = p;
       const { error, data: rawData } = await supabase
         .from('products')
         .insert({
           name: name.trim(), 
           sku, 
           price_value: Number(price_value) || 0,
+          cost_price: Number(cost_price) || 0,
+          base_inventory: Number(base_inventory) || 0,
+          inventory_threshold: Number(inventory_threshold) || 5,
           status, 
           status_color, 
           is_out_of_stock,
@@ -205,32 +179,16 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
       const data = Array.isArray(rawData) ? rawData[0] : rawData;
 
       if (data && data.id) {
-        // Intercept metadata if present in 'p'
-        const enriched = { 
-          ...data,
-          cost_price: p.cost_price,
-          base_inventory: p.base_inventory,
-          inventory_threshold: p.inventory_threshold
-        };
-
-        if (enriched.cost_price !== undefined || enriched.base_inventory !== undefined) {
-          localStorage.setItem(`stornote_meta_${data.id}`, JSON.stringify({
-            costPrice: enriched.cost_price,
-            baseInventory: enriched.base_inventory,
-            inventoryThreshold: enriched.inventory_threshold
-          }));
-        }
-
         console.log('[ProductContext] Product added successfully, ID resolved:', data.id);
         
-        // Optimistic state update - Keep it simple and fast
+        // Optimistic state update
         setProducts(prev => {
           const exists = prev.some(item => item.id === data.id);
           if (exists) return prev;
-          return [enriched, ...prev].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+          return [data, ...prev].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
         });
 
-        return enriched;
+        return data;
       } else {
         console.warn('[ProductContext] Product insertion returned empty or invalid ID data:', rawData);
       }
@@ -245,25 +203,24 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
     try {
       console.log(`[ProductContext] Updating product ${id}:`, updates);
       
-      // Meta-data persistence
-      if (updates.cost_price !== undefined || updates.base_inventory !== undefined || updates.inventory_threshold !== undefined) {
-        const savedMeta = localStorage.getItem(`stornote_meta_${id}`);
-        const currentMeta = savedMeta ? JSON.parse(savedMeta) : {};
-        localStorage.setItem(`stornote_meta_${id}`, JSON.stringify({
-          costPrice: updates.cost_price !== undefined ? updates.cost_price : currentMeta.costPrice,
-          baseInventory: updates.base_inventory !== undefined ? updates.base_inventory : currentMeta.baseInventory,
-          inventoryThreshold: updates.inventory_threshold !== undefined ? updates.inventory_threshold : currentMeta.inventoryThreshold
-        }));
-      }
-
-      const basicFields = ['name', 'sku', 'price_value', 'status', 'status_color', 'is_out_of_stock'];
+      const allowedFields = [
+        'name', 'sku', 'price_value', 'cost_price', 
+        'base_inventory', 'inventory_threshold', 
+        'status', 'status_color', 'is_out_of_stock'
+      ];
+      
       const dbUpdates: any = {
         updated_at: new Date().toISOString()
       };
       
       Object.keys(updates).forEach(key => {
-        if (basicFields.includes(key)) {
-          dbUpdates[key] = (updates as any)[key];
+        if (allowedFields.includes(key)) {
+          // Normalize numbers for DB
+          if (['price_value', 'cost_price', 'base_inventory', 'inventory_threshold'].includes(key)) {
+            dbUpdates[key] = Number((updates as any)[key]) || 0;
+          } else {
+            dbUpdates[key] = (updates as any)[key];
+          }
         }
       });
 
