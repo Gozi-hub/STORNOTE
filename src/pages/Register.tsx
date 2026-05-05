@@ -125,22 +125,6 @@ export default function Register() {
     try {
       const emailLower = formData.email.toLowerCase().trim();
       
-      // NEW: Pre-check in handleSubmit as well to prevent malformed verifyOtp calls
-      // that trigger HTML 403 leaks from the gateway.
-      const { data: existingProfile, error: checkError } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('email', emailLower)
-        .maybeSingle();
-
-      if (existingProfile) {
-        setLoading(false);
-        const msg = '⚠️ 该邮箱已注册，请直接前往登录界面。';
-        toast.error(msg);
-        setError(msg);
-        return;
-      }
-
       const codeClean = formData.code.trim();
       if (codeClean.length !== 6 || !/^\d+$/.test(codeClean)) {
         setLoading(false);
@@ -184,26 +168,25 @@ export default function Register() {
       
       toast.success('验证成功，正在创建账户...');
 
-      // Step 4: Create User Profile in database
-      console.log('[Auth] Step 4: Creating profile in database...');
+      // Step 4: Create/Sync User Profile in database
+      console.log('[Auth] Step 4: Syncing profile in database...');
       const isAdminEmail = emailLower === 'bdjdnjdhdbd4@gmail.com';
       
       const { error: profileError } = await supabase
         .from('profiles')
-        .insert({
+        .upsert({
           id: data.user.id,
           email: emailLower,
           role: isAdminEmail ? 'admin' : 'user',
           status: 'approved',
-          created_at: new Date().toISOString()
-        });
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
 
       if (profileError) {
-        console.error('[Auth] Profile creation failed (database write error):', profileError);
-        // Don't throw here, the auth part was successful
-        toast.error('账户资料同步失败，请联系管理员。');
+        console.warn('[Auth] Profile sync status:', profileError.message);
+        // We continue anyway since auth was successful
       } else {
-        console.log('[Auth] Profile created successfully.');
+        console.log('[Auth] Profile synced successfully.');
       }
 
       toast.success('注册成功！正在进入控制面板...');

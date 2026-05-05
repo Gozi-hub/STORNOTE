@@ -99,33 +99,30 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
           schema: 'public', 
           table: 'products'
         }, (payload) => {
-          console.log('[Realtime] Product event received:', payload.eventType, payload.new?.id || payload.old?.id);
+          console.log('[Realtime] Product event received:', payload.eventType, payload);
           
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const data = payload.new as Product;
-            
-            // Safety check: ensure user_id matches
-            if (data.user_id && data.user_id !== user.id) {
-              console.log('[Realtime] Ignoring event for different user:', data.user_id);
-              return;
-            }
+            if (!data) return;
 
             if (payload.eventType === 'INSERT') {
               const blacklist = getPersistentBlacklist();
               if (blacklist.has(data.id) || deletedIdsRef.current.has(data.id)) {
-                console.log('[Realtime] Ignoring INSERT for locally deleted item');
+                console.log('[Realtime] Ignoring INSERT: item locally deleted');
                 return;
               }
               
               setProducts(prev => {
                 if (prev.some(p => p.id === data.id)) return prev;
-                console.log('[Realtime] Adding new product via sync:', data.id);
+                console.log('[Realtime] Sync ADD:', data.name);
                 return [...prev, data].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
               });
             } else if (payload.eventType === 'UPDATE') {
               const blacklist = getPersistentBlacklist();
+              
+              // Handle soft-delete status
               if (data.status === '已彻底删除' || blacklist.has(data.id) || deletedIdsRef.current.has(data.id)) {
-                console.log('[Realtime] Removing updated product (soft-deleted):', data.id);
+                console.log('[Realtime] Sync REMOVE (soft-deleted):', data.id);
                 setProducts(prev => prev.filter(p => p.id !== data.id));
                 return;
               }
@@ -133,17 +130,17 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
               setProducts(prev => {
                 const exists = prev.some(p => p.id === data.id);
                 if (!exists) {
-                   console.log('[Realtime] Product appeared via UPDATE sync:', data.id);
+                   console.log('[Realtime] Sync APPEAR (newly visible):', data.name);
                    return [...prev, data].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
                 }
-                console.log('[Realtime] Updating product via sync:', data.id);
+                console.log('[Realtime] Sync UPDATE:', data.name);
                 return prev.map(p => p.id === data.id ? { ...p, ...data } : p);
               });
             }
           } else if (payload.eventType === 'DELETE') {
-            const deletedId = payload.old.id;
+            const deletedId = payload.old?.id;
             if (deletedId) {
-              console.log('[Realtime] Syncing product deletion:', deletedId);
+              console.log('[Realtime] Sync DELETE:', deletedId);
               setProducts(prev => prev.filter(p => p.id !== deletedId));
             }
           }

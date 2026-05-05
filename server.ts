@@ -62,8 +62,6 @@ async function startServer() {
       changeOrigin: true,
       secure: false,
       ws: true,
-      // We don't use pathRewrite globally here because we handle it in the mount logic
-      proxyTimeout: 30000,
       on: {
         proxyReq: (proxyReq, req, res) => {
           proxyReq.setHeader('apikey', SUPABASE_ANON_KEY);
@@ -74,44 +72,16 @@ async function startServer() {
           }
           
           proxyReq.setHeader('host', targetBase.host);
-          
-          // Force origin and referer to match target to satisfy some WAFs/CORS
           proxyReq.setHeader('Origin', targetBase.origin);
           proxyReq.setHeader('Referer', `${targetBase.origin}/`);
           
-          // Hard-enforce JSON acceptance to prevent HTML redirects on 4xx/5xx
-          if (req.headers['accept'] && !req.headers['accept'].includes('application/json')) {
-            proxyReq.setHeader('Accept', 'application/json, text/plain, */*');
-          } else if (!req.headers['accept']) {
-            proxyReq.setHeader('Accept', 'application/json');
-          }
-          
-          // Debugging path
           const urlStr = req.url || '';
-          if (urlStr.includes('/auth/') || urlStr.includes('/rest/')) {
-            console.log(`[Proxy Link] ${req.method} ${urlStr} -> ${targetBase.host}`);
-          }
-        },
-        proxyRes: (proxyRes, req, res) => {
-          const status = proxyRes.statusCode;
-          const contentType = proxyRes.headers['content-type'];
-          if (status && status >= 400) {
-            console.warn(`[Proxy Res Error] ${req.method} ${req.url} -> Status ${status} (${contentType})`);
-          } else if (req.url && (req.url.includes('/auth/') || req.url.includes('/rest/'))) {
-            // Success logging
-            console.log(`[Proxy Res Success] ${req.method} ${req.url} -> Status ${status}`);
+          if (urlStr.includes('realtime')) {
+             console.log(`[Proxy WS Req] ${urlStr}`);
           }
         },
         error: (err, req, res) => {
           console.error('[Proxy Error]:', err.message);
-          const response = res as any;
-          if (!response.headersSent) {
-            response.status(502).json({ 
-              error: 'Gateway Sync Error', 
-              message: '身份验证网关同步失败，请刷新页面重试',
-              details: err.message 
-            });
-          }
         }
       }
     });
