@@ -6,11 +6,15 @@ const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.e
 // Sanitize URL: Remove /rest/v1 if accidentally included
 const supabaseUrl = supabaseUrlRaw.replace(/\/rest\/v1\/?$/, '').replace(/\/+$/, '');
 
-// Use a proxy URL if we're in the browser to bypass network restrictions
+// Use a proxy URL if we're in the browser to bypass local network restrictions
+// BUT check if we are in our specific dev environment first.
+// If it's a standard deployment (like Netlify), we should use direct URL if possible.
 const isBrowser = typeof window !== 'undefined';
+const isDevApplet = isBrowser && window.location.hostname.includes('europe-west2.run.app');
+
 let effectiveUrl = (supabaseUrl || 'https://placeholder-url.supabase.co');
 
-if (isBrowser) {
+if (isBrowser && isDevApplet) {
   // Use current origin to build an absolute URL for the SDK
   // We trim trailing slashes to avoid double-slashes in paths
   const origin = window.location.origin.replace(/\/+$/, '');
@@ -31,7 +35,7 @@ try {
         fetch: async (input, init) => {
           let url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as any).url;
 
-          if (isBrowser && url) {
+          if (isBrowser && isDevApplet && url) {
             let newUrl = url;
             // 1. Convert absolute supabase.co URLs to absolute proxy URLs
             if (url.includes('.supabase.co')) {
